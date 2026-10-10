@@ -298,3 +298,129 @@ PodDisruptionBudget for payment-service, non-root read-only containers, NetworkP
 
 This code was written in an environment without access to Maven Central, so it has **not yet been
 compiled or run**. Run `mvn verify` first; if anything fails, the error will point to the exact file.
+
+
+
+
+---------------------# Card-Present (POS) Transaction Flow, Failures, and Idempotency
+
+## 1. Players
+
+Cardholder → *POS terminal* → *Acquirer/PSP* (merchant's bank) → *Card network* (Visa/Mastercard/RuPay) → *Issuer* (your bank) → back along the same path.
+
+## 2. Step-by-step: a successful payment
+
+1. *Card read.* Chip insert (EMV), tap (NFC contactless), or magstripe swipe (fallback). The chip generates a cryptogram.
+2. *Application selection.* The terminal picks the app (e.g., Visa Debit) from the chip.
+3. *Cardholder verification (CVM).* Online PIN, offline PIN, signature, or none/CDCVM (phone biometrics, low-value tap).
+4. *Terminal risk checks.* Floor limit, velocity, and a decision on whether to go online.
+5. *Authentication.* The chip produces an *ARQC* cryptogram, and the issuer validates it with its keys. PIN is encrypted in a PIN block (3DES/AES, HSM-translated). This is what makes card-present far safer than card-not-present.
+6. *Authorization request.* The terminal sends an ISO 8583 message (MTI 0100/0200) with PAN (tokenized where possible), amount, STAN, RRN, terminal ID, merchant ID, and EMV data. It goes acquirer → network → issuer.
+7. *Issuer decision.* Checks include balance/credit limit, card status, fraud rules, and PIN verification. The issuer *places a hold* on funds. Money has not moved yet.
+8. *Response* (0110/0210) with code 00 (approved), 51 (insufficient funds), 05 (do not honor), 91 (issuer unavailable), etc., plus an auth code.
+9. *Chip completion.* The card returns a *TC* (approved) or *AAC* (declined) cryptogram.
+10. *Receipt printed.*
+11. *Clearing (batch, end of day).* The merchant submits captured transactions, and the network routes them to issuers.
+12. *Settlement (T+1 to T+2).* Funds move issuer → network → acquirer → merchant, minus the MDR fee.
+
+Authorization is a promise, and settlement is the actual money movement.
+
+## 3. Failure scenarios and handling
+
+| Scenario | What happens |
+|---|---|
+| *Declined* (51, 05, wrong PIN) | The terminal shows the error, no hold is placed, and no reversal is needed. |
+| *Timeout: no response from the issuer* (the dangerous one) | The issuer may have approved and held funds. The terminal/acquirer must send a *reversal (0400)* with the original STAN/RRN. Reversals are retried until acknowledged (*store-and-forward*). |
+| *Approved but terminal lost the response* | Same as above: auto-reversal. The customer sees a temporary hold that is released in minutes to days. |
+| *Chip declines after the issuer approved* (AAC) | Reversal is sent. |
+| *Network or acquirer down* | Offline approval is possible for small amounts under the floor limit, and the transaction is stored and forwarded later. |
+| *Partial approval* | The issuer approves less than requested, and the merchant collects the rest by another tender. |
+| *Wrong or duplicate charge after settlement* | Refund (new credit transaction) or chargeback (customer disputes via the issuer). |
+
+## 4. Double payment: how it happens
+
+- Customer swipes twice because the screen was slow.
+- The terminal retries after a timeout.
+- A load balancer or gateway retries the HTTP call.
+- A client thread and a retry job both submit the same request.
+
+The defense is *idempotency*: the same request processed N times produces the effect of exactly once.
+
+## 5. Idempotency design
+
+*Idempotency key* (one logical payment attempt):
+- Card-present: terminalId + STAN + RRN + transmissionDateTime (ISO 8583 gives you these).
+- API/PSP: client-generated Idempotency-Key header (UUID).
+
+*Rules:*
+1. First request with a key: process it and store the result against the key.
+2. Same key, same payload: return the stored result without reprocessing.
+3. Same key, different payload (e.g., amount changed): reject with 409/422.
+4. Same key, still in progress: return 409/"processing", or wait and return the result.
+
+*Concurrency control (multiple threads, same key).* Check-then-insert in application code is a race. You need an *atomic* guard:
+- *DB unique constraint* on idempotency_key (the source of truth).
+- *Redis SET key value NX EX ttl* as a fast front lock.
+- *Optimistic locking* (@Version) on the payment/account row.
+- *SELECT ... FOR UPDATE* where you must serialize on a balance.
+
+## 6. Java microservices implementation
+
+*Services:* API Gateway → Payment Service → Fraud/Risk, Ledger/Account, Notification, plus an integration adapter to the network/issuer (ISO 8583 via jPOS).
+
+*Payment state machine:*
+INITIATED → AUTHORIZED → CAPTURED → SETTLED, with the exits DECLINED, REVERSED, FAILED, and TIMEOUT_PENDING_REVERSAL. Only legal transitions are allowed.
+
+*Entity with the unique constraint:*
+java
+@Entity
+@Table(name = "payment",
+  uniqueConstraints = @UniqueConstraint(columnNames = "idempotencyKey"))
+public class Payment {
+  @Id UUID id;
+  @Column(nullable = false) String idempotencyKey;
+  String requestHash;        // hash of payload, to detect mismatches
+  @Enumerated(EnumType.STRING) Status status;
+  String responseCode, authCode;
+  @Version Long version;     // optimistic lock
+}
+
+
+*Service logic:*
+java
+@Transactional
+public PaymentResponse pay(PaymentRequest req, String key) {
+  String hash = sha256(req);
+  try {
+    Payment p = repo.saveAndFlush(Payment.initiated(key, hash)); // atomic claim
+    return process(p, req);
+  } catch (DataIntegrityViolationException dup) {   // another thread won
+    Payment existing = repo.findByIdempotencyKey(key).orElseThrow();
+    if (!existing.getRequestHash().equals(hash))
+      throw new IdempotencyConflictException();
+    return existing.toResponse();                    // replay stored result
+  }
+}
+
+Only one thread can insert the key. The others hit the constraint and replay the stored result.
+
+*Calling the issuer safely:*
+- Set explicit timeouts. On timeout, mark TIMEOUT_PENDING_REVERSAL and enqueue a reversal. Never assume failure.
+- Reversal is itself idempotent (keyed by the original STAN/RRN).
+- Use *Resilience4j* circuit breaker and retry, but retry only with the *same key*.
+
+*Cross-service consistency:*
+- *Transactional outbox:* write the payment state and the event in one DB transaction, then a relay publishes to Kafka. This avoids "DB saved but event lost."
+- *Idempotent consumers:* the Ledger/Notification services store processed `eventId`s (or use a unique constraint) so Kafka's at-least-once delivery doesn't double-post.
+- *Saga:* Authorize → Ledger hold → Capture. Compensating actions: void/reverse hold, refund.
+- *Reconciliation job (daily):* match your records against the acquirer/network settlement files. It catches orphan approvals, missing reversals, and duplicates that slipped through.
+
+*Other essentials:*
+- Never log PAN/PIN/CVV (PCI-DSS). Tokenize and encrypt, and keep keys in an HSM/KMS.
+- Idempotency records need a TTL (typically 24-72h in Redis, longer in DB for audit).
+- Ensure the clock/ID source is consistent: STAN is only unique per terminal per day, so combine it with other fields.
+- Use distributed tracing (a correlation ID across services) so every attempt is traceable.
+
+## 7. One-line summary
+
+Authorize (hold) → capture → clear → settle; on any ambiguity, reverse; and make every step idempotent with an atomic key claim (unique constraint), outbox for events, and idempotent consumers, so retries and parallel threads can never charge twice
