@@ -1,0 +1,86 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: payment-service
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/payments_db}
+    username: ${DB_USERNAME:pos}
+    password: ${DB_PASSWORD:pos}
+    hikari:
+      maximum-pool-size: 20
+  mvc:
+    problemdetails:
+      enabled: true          # RFC 9457 error bodies, including validation errors
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true     # broker de-duplicates producer retries
+        max.in.flight.requests.per.connection: 5
+
+security:
+  jwt:
+    issuer: ${SECURITY_JWT_ISSUER:pos-auth}
+    audience: ${SECURITY_JWT_AUDIENCE:pos-api}
+    jwk-set-uri: ${SECURITY_JWT_JWK_SET_URI:http://localhost:8081/.well-known/jwks.json}
+
+payments:
+  issuer:
+    base-url: ${ISSUER_BASE_URL:http://localhost:8083}
+    connect-timeout: 1s
+    read-timeout: 3s
+  card:
+    token-secret: ${CARD_TOKEN_SECRET:local-dev-only-change-me}
+  reversal:
+    max-attempts: 20
+    stuck-initiated-after: 60s
+    interval-ms: 5000
+  outbox:
+    interval-ms: 500
+  kafka:
+    partitions: 3
+    replicas: ${KAFKA_TOPIC_REPLICAS:1}
+  jobs:
+    enabled: true
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      issuer:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 2s
+        slow-call-rate-threshold: 80
+        wait-duration-in-open-state: 15s
+        permitted-number-of-calls-in-half-open-state: 3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  health:
+    circuitbreakers:
+      enabled: true
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{correlationId:-}]"

@@ -1,0 +1,40 @@
+# Cloud overlay (EKS / AKS / GKE / OpenShift).
+#   1. Push images (see .github/workflows/ci.yml or README) and set newName below.
+#   2. Create the pos-secrets Secret (README "Deploy to the cloud").
+#   3. kubectl apply -k k8s/overlays/cloud
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+
+images:
+  - name: pos/auth-service
+    newName: ghcr.io/YOUR_GITHUB_USER/pos-auth-service
+    newTag: "1.0.0"
+  - name: pos/payment-service
+    newName: ghcr.io/YOUR_GITHUB_USER/pos-payment-service
+    newTag: "1.0.0"
+  - name: pos/reports-service
+    newName: ghcr.io/YOUR_GITHUB_USER/pos-reports-service
+    newTag: "1.0.0"
+  - name: pos/issuer-simulator
+    newName: ghcr.io/YOUR_GITHUB_USER/pos-issuer-simulator
+    newTag: "1.0.0"
+
+patches:
+  # Production: no demo accounts.
+  - target: { kind: ConfigMap, name: pos-config }
+    patch: |-
+      - op: replace
+        path: /data/AUTH_SEED_ENABLED
+        value: "false"
+  - target: { kind: Ingress, name: pos-api }
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: pos.YOUR-DOMAIN.com
+      - op: add
+        path: /spec/tls
+        value:
+          - hosts: [pos.YOUR-DOMAIN.com]
+            secretName: pos-api-tls

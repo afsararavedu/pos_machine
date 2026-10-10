@@ -1,0 +1,21 @@
+# Local Kubernetes (Docker Desktop / kind / minikube) with demo accounts enabled.
+#   docker compose build            # builds pos-payments-<service> images
+#   then tag them as pos/<service>:1.0.0 (README) or load them into kind
+#   kubectl apply -k k8s/overlays/local
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+
+patches:
+  # A single replica of each app keeps a laptop happy and works without a shared JWT key.
+  - target: { kind: Deployment }
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target: { kind: HorizontalPodAutoscaler, name: payment-service }
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1

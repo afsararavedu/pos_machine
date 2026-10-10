@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:reports;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: none
+  kafka:
+    admin:
+      auto-create: false
+    listener:
+      auto-startup: false    # the processor is tested directly; no broker needed

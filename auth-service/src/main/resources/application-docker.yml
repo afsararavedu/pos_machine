@@ -1,0 +1,5 @@
+# Values come from docker-compose / Kubernetes environment variables; this profile exists
+# so environment-specific overrides have an obvious home.
+logging:
+  level:
+    com.aifsar.pos: INFO

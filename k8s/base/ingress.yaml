@@ -1,0 +1,26 @@
+# One public host, path-routed. issuer-simulator is deliberately NOT exposed.
+# Set the host and TLS secret in your overlay; terminate TLS here (or at the cloud load balancer).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pos-api
+  annotations:
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: pos.example.com
+      http:
+        paths:
+          - path: /auth
+            pathType: Prefix
+            backend: { service: { name: auth-service, port: { number: 8081 } } }
+          - path: /.well-known
+            pathType: Prefix
+            backend: { service: { name: auth-service, port: { number: 8081 } } }
+          - path: /api/v1/reports
+            pathType: Prefix
+            backend: { service: { name: reports-service, port: { number: 8084 } } }
+          - path: /api/v1
+            pathType: Prefix
+            backend: { service: { name: payment-service, port: { number: 8082 } } }

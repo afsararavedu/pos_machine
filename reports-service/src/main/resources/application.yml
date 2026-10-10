@@ -1,0 +1,57 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: reports-service
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/reports_db}
+    username: ${DB_USERNAME:pos}
+    password: ${DB_PASSWORD:pos}
+  mvc:
+    problemdetails:
+      enabled: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: reports-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false      # commit only after the DB transaction succeeds
+      isolation-level: read_committed
+    listener:
+      concurrency: 3                 # one thread per partition
+
+security:
+  jwt:
+    issuer: ${SECURITY_JWT_ISSUER:pos-auth}
+    audience: ${SECURITY_JWT_AUDIENCE:pos-api}
+    jwk-set-uri: ${SECURITY_JWT_JWK_SET_URI:http://localhost:8081/.well-known/jwks.json}
+
+reports:
+  business-zone: ${REPORTS_BUSINESS_ZONE:Asia/Kolkata}
+  kafka:
+    partitions: 3
+    replicas: ${KAFKA_TOPIC_REPLICAS:1}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{correlationId:-}]"

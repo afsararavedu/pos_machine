@@ -1,0 +1,30 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: issuer-simulator
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:h2:mem:issuer;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000
+    username: sa
+    password: ""
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: create
+
+issuer:
+  slow-card-delay: 8s     # payment-service read timeout is 3s, so the slow card always times out
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true

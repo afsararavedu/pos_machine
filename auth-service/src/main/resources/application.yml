@@ -1,0 +1,53 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: auth-service
+  threads:
+    virtual:
+      enabled: true          # Java 21 virtual threads for request handling
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/auth_db}
+    username: ${DB_USERNAME:pos}
+    password: ${DB_PASSWORD:pos}
+  mvc:
+    problemdetails:
+      enabled: true          # RFC 9457 error bodies, including validation errors
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+security:
+  jwt:
+    issuer: ${SECURITY_JWT_ISSUER:pos-auth}
+    audience: ${SECURITY_JWT_AUDIENCE:pos-api}
+
+auth:
+  tokens:
+    access-token-ttl: 15m
+    terminal-token-ttl: 1h
+    refresh-token-ttl: 7d
+    private-key-pem: ${AUTH_JWT_PRIVATE_KEY:}
+  lockout:
+    max-failed-attempts: 5
+    lock-duration: 15m
+  seed:
+    enabled: ${AUTH_SEED_ENABLED:true}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{correlationId:-}]"

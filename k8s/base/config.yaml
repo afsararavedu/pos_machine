@@ -1,0 +1,28 @@
+# Non-secret settings shared by the services.
+# Secrets (DB password, JWT signing key, card token key) are NOT here: create the
+# "pos-secrets" Secret as described in README.md (or sync it from Vault / cloud secret manager).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pos-config
+data:
+  SPRING_PROFILES_ACTIVE: docker
+  SECURITY_JWT_ISSUER: pos-auth
+  SECURITY_JWT_AUDIENCE: pos-api
+  SECURITY_JWT_JWK_SET_URI: http://auth-service:8081/.well-known/jwks.json
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  ISSUER_BASE_URL: http://issuer-simulator:8083
+  KAFKA_TOPIC_REPLICAS: "1"
+  DB_USERNAME: pos
+  AUTH_SEED_ENABLED: "true"
+  JAVA_OPTS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  init.sql: |
+    CREATE DATABASE auth_db;
+    CREATE DATABASE payments_db;
+    CREATE DATABASE reports_db;
