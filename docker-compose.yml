@@ -1,0 +1,95 @@
+# Full local stack:   docker compose up --build
+# Infra only (run services from your IDE with the "local" profile):
+#                     docker compose up postgres kafka
+name: pos-payments
+
+x-service-env: &service-env
+  SPRING_PROFILES_ACTIVE: docker
+  SECURITY_JWT_ISSUER: pos-auth
+  SECURITY_JWT_AUDIENCE: pos-api
+  SECURITY_JWT_JWK_SET_URI: http://auth-service:8081/.well-known/jwks.json
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pos
+      POSTGRES_PASSWORD: pos
+      POSTGRES_DB: pos
+    ports: ["5432:5432"]
+    volumes:
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pos"]
+      interval: 5s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:3.9.0
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      retries: 20
+
+  auth-service:
+    build: { context: ., args: { MODULE: auth-service } }
+    image: pos/auth-service:1.0.0
+    ports: ["8081:8081"]
+    environment:
+      <<: *service-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/auth_db
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  issuer-simulator:
+    build: { context: ., args: { MODULE: issuer-simulator } }
+    image: pos/issuer-simulator:1.0.0
+    ports: ["8083:8083"]
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+
+  payment-service:
+    build: { context: ., args: { MODULE: payment-service } }
+    image: pos/payment-service:1.0.0
+    ports: ["8082:8082"]
+    environment:
+      <<: *service-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payments_db
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      ISSUER_BASE_URL: http://issuer-simulator:8083
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      auth-service: { condition: service_started }
+      issuer-simulator: { condition: service_started }
+
+  reports-service:
+    build: { context: ., args: { MODULE: reports-service } }
+    image: pos/reports-service:1.0.0
+    ports: ["8084:8084"]
+    environment:
+      <<: *service-env
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/reports_db
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      auth-service: { condition: service_started }
+
+volumes:
+  pgdata:
